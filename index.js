@@ -566,4 +566,107 @@ app.post("/borrows", async (req, res) => {
   }
 });
 
+// Get borrows of a user
+app.get("/borrows", async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email || typeof email !== "string") {
+      return res.status(400).json({
+        success: false,
+        message: "User email is required.",
+      });
+    }
+
+    const userEmail = email.trim().toLowerCase();
+
+    const borrows = await db
+      .collection("borrows")
+      .find({
+        userEmail,
+      })
+      .sort({ borrowDate: -1 })
+      .toArray();
+
+    res.status(200).json({
+      success: true,
+      message: "Borrow records fetched successfully.",
+      borrows,
+    });
+  } catch (error) {
+    console.error("Get borrows error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch borrow records.",
+    });
+  }
+});
+
+// Return a borrowed book
+app.delete("/borrows/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Validate borrow ID
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid borrow ID.",
+      });
+    }
+
+    const borrowsCollection = db.collection("borrows");
+    const borrowId = new ObjectId(id);
+
+    // Find borrow record
+    const borrow = await borrowsCollection.findOne({
+      _id: borrowId,
+    });
+
+    if (!borrow) {
+      return res.status(404).json({
+        success: false,
+        message: "Borrow record not found.",
+      });
+    }
+
+    // Delete borrow record
+    const deleteResult = await borrowsCollection.deleteOne({
+      _id: borrowId,
+    });
+
+    if (deleteResult.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Borrow record not found.",
+      });
+    }
+
+    // Increase available copies
+    await db.collection("books").updateOne(
+      {
+        _id: new ObjectId(borrow.bookId),
+      },
+      {
+        $inc: {
+          availableCopies: 1,
+        },
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Book returned successfully!",
+    });
+  } catch (error) {
+    console.error("Return book error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to return book.",
+    });
+  }
+});
+
 startServer();
