@@ -134,6 +134,31 @@ app.get("/books", async (req, res) => {
   }
 });
 
+// Get latest 6 books
+app.get("/books/latest", async (req, res) => {
+  try {
+    const latestBooks = await db
+      .collection("books")
+      .find({})
+      .sort({ addedAt: -1 })
+      .limit(6)
+      .toArray();
+
+    res.status(200).json({
+      success: true,
+      message: "Latest 6 books fetched successfully",
+      books: latestBooks,
+    });
+  } catch (error) {
+    console.error("Get latest books error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch latest books",
+    });
+  }
+});
+
 // Get a single book by ID
 app.get("/books/:id", async (req, res) => {
   try {
