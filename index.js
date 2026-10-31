@@ -401,4 +401,41 @@ app.patch("/books/:id", async (req, res) => {
   }
 });
 
+// Delete a book
+app.delete("/books/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book ID",
+      });
+    }
+
+    const result = await db.collection("books").deleteOne({
+      _id: new ObjectId(id),
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Book not found.",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Book deleted successfully!",
+    });
+  } catch (error) {
+    console.error("Delete book error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete book.",
+    });
+  }
+});
+
 startServer();
