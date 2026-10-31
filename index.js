@@ -112,6 +112,28 @@ app.use((error, req, res, next) => {
   });
 });
 
+// Get all books
+app.get("/books", async (req, res) => {
+  try {
+    const books = await db
+      .collection("books")
+      .find({})
+      .sort({ addedAt: -1 })
+      .toArray();
+
+    res.status(200).json({
+      success: true,
+      message: "Books fetched successfully",
+      books,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch books",
+    });
+  }
+});
+
 // Add a new book
 app.post("/books", async (req, res) => {
   try {
