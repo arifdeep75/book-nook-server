@@ -275,4 +275,130 @@ async function startServer() {
   }
 }
 
+// Update a book
+app.patch("/books/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book ID",
+      });
+    }
+
+    const {
+      title,
+      author,
+      category,
+      image,
+      description,
+      totalCopies,
+    } = req.body;
+
+    // Validate required fields
+    if (
+      !title?.trim() ||
+      !author?.trim() ||
+      !category ||
+      !image?.trim() ||
+      !description?.trim() ||
+      totalCopies === undefined
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide all required book information.",
+      });
+    }
+
+    // Validate category
+    const allowedCategories = [
+      "Fiction",
+      "Science",
+      "History",
+      "Kids",
+      "Others",
+    ];
+
+    if (!allowedCategories.includes(category)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book category.",
+      });
+    }
+
+    // Validate total copies
+    const copies = Number(totalCopies);
+
+    if (!Number.isInteger(copies) || copies < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Total copies must be at least 1.",
+      });
+    }
+
+    const booksCollection = db.collection("books");
+    const bookId = new ObjectId(id);
+
+    // Find existing book
+    const existingBook = await booksCollection.findOne({
+      _id: bookId,
+    });
+
+    if (!existingBook) {
+      return res.status(404).json({
+        success: false,
+        message: "Book not found.",
+      });
+    }
+
+    // Calculate borrowed copies
+    const borrowedCopies =
+      existingBook.totalCopies - existingBook.availableCopies;
+
+    if (copies < borrowedCopies) {
+      return res.status(400).json({
+        success: false,
+        message: `At least ${borrowedCopies} copies are currently borrowed.`,
+      });
+    }
+
+    // Updated book information
+    const updatedBook = {
+      title: title.trim(),
+      author: author.trim(),
+      category,
+      image: image.trim(),
+      description: description.trim(),
+      totalCopies: copies,
+      availableCopies: copies - borrowedCopies,
+      updatedAt: new Date(),
+    };
+
+    // Update book in MongoDB
+    await booksCollection.updateOne(
+      { _id: bookId },
+      { $set: updatedBook }
+    );
+
+    // Get updated book
+    const book = await booksCollection.findOne({
+      _id: bookId,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Book updated successfully!",
+      book,
+    });
+  } catch (error) {
+    console.error("Update book error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to update book.",
+    });
+  }
+});
+
 startServer();
