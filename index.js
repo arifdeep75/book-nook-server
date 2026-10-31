@@ -438,4 +438,132 @@ app.delete("/books/:id", async (req, res) => {
   }
 });
 
+// Borrow a book
+app.post("/borrows", async (req, res) => {
+  try {
+    const {
+      bookId,
+      userEmail,
+      borrowDate,
+      returnDate,
+    } = req.body;
+
+    // Validate required fields
+    if (!bookId || !userEmail || !borrowDate || !returnDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide all required borrow information.",
+      });
+    }
+
+    // Validate book ID
+    if (!ObjectId.isValid(bookId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book ID.",
+      });
+    }
+
+    // Validate email
+    const email = userEmail.trim().toLowerCase();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email address.",
+      });
+    }
+
+    // Validate dates
+    const borrowedAt = new Date(borrowDate);
+    const returnedAt = new Date(returnDate);
+
+    if (
+      Number.isNaN(borrowedAt.getTime()) ||
+      Number.isNaN(returnedAt.getTime()) ||
+      returnedAt <= borrowedAt
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide valid borrow and return dates.",
+      });
+    }
+
+    const booksCollection = db.collection("books");
+    const borrowsCollection = db.collection("borrows");
+    const bookObjectId = new ObjectId(bookId);
+
+    // Decrease available copies only if a copy is available
+    const updateResult = await booksCollection.updateOne(
+      {
+        _id: bookObjectId,
+        availableCopies: { $gt: 0 },
+      },
+      {
+        $inc: { availableCopies: -1 },
+      }
+    );
+
+    if (updateResult.modifiedCount === 0) {
+      const book = await booksCollection.findOne({
+        _id: bookObjectId,
+      });
+
+      if (!book) {
+        return res.status(404).json({
+          success: false,
+          message: "Book not found.",
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: "No copies are currently available.",
+      });
+    }
+
+    // Get book details
+    const book = await booksCollection.findOne({
+      _id: bookObjectId,
+    });
+
+    const borrowData = {
+      bookId: bookObjectId,
+      bookTitle: book.title,
+      bookImage: book.image,
+      userEmail: email,
+      borrowDate: borrowedAt,
+      returnDate: returnedAt,
+    };
+
+    try {
+      const result = await borrowsCollection.insertOne(borrowData);
+
+      return res.status(201).json({
+        success: true,
+        message: "Book borrowed successfully!",
+        borrow: {
+          _id: result.insertedId,
+          ...borrowData,
+        },
+      });
+    } catch (insertError) {
+      // Restore available copy if borrow record could not be saved
+      await booksCollection.updateOne(
+        { _id: bookObjectId },
+        { $inc: { availableCopies: 1 } }
+      );
+
+      throw insertError;
+    }
+  } catch (error) {
+    console.error("Borrow book error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to borrow book.",
+    });
+  }
+});
+
 startServer();
