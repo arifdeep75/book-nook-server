@@ -7,18 +7,30 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import { randomUUID } from "crypto";
+import verifySession from "./middlewares/verifySession.js";
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 5000;
+const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
 
-app.use(cors());
+app.use(
+  cors({
+    origin: frontendUrl,
+    credentials: true,
+  })
+);
+
 app.use(express.json());
 
 // MongoDB connection
 const client = new MongoClient(process.env.MONGODB_URI);
 const db = client.db(process.env.DB_NAME);
+
+const booksCollection = db.collection("books");
+const borrowsCollection = db.collection("borrows");
+const reviewsCollection = db.collection("reviews");
 
 // Upload directory
 const uploadDir = path.join(process.cwd(), "uploads");
@@ -56,8 +68,20 @@ const upload = multer({
   },
 });
 
+const allowedCategories = [
+  "Fiction",
+  "Science",
+  "History",
+  "Kids",
+  "Others",
+];
+
 // Serve uploaded images
 app.use("/uploads", express.static(uploadDir));
+
+// ==========================================
+// BASIC ROUTES
+// ==========================================
 
 // Test route
 app.get("/", (req, res) => {
@@ -68,52 +92,66 @@ app.get("/", (req, res) => {
 app.get("/test-db", async (req, res) => {
   try {
     await db.command({ ping: 1 });
+
     res.send("MongoDB Connected Successfully!");
   } catch (error) {
     console.error("MongoDB connection error:", error);
+
     res.status(500).send("MongoDB Connection Failed!");
   }
 });
 
-// Image upload API
-app.post("/upload", upload.single("image"), (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({
+// ==========================================
+// IMAGE UPLOAD API
+// ==========================================
+
+// Login required
+app.post(
+  "/upload",
+  verifySession,
+  upload.single("image"),
+  (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "Please select an image.",
+        });
+      }
+
+      const imageUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+
+      res.status(201).json({
+        success: true,
+        message: "Image uploaded successfully!",
+        imageUrl,
+      });
+    } catch (error) {
+      console.error("Image upload error:", error);
+
+      res.status(500).json({
         success: false,
-        message: "Please select an image.",
+        message: "Image upload failed.",
       });
     }
-
-    const imageUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
-
-    res.status(201).json({
-      success: true,
-      message: "Image uploaded successfully!",
-      imageUrl,
-    });
-  } catch (error) {
-    console.error("Image upload error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Image upload failed.",
-    });
   }
-});
+);
 
-// Get all books
+// ==========================================
+// BOOKS API
+// ==========================================
+
+// Get all books - Public
 app.get("/books", async (req, res) => {
   try {
-    const books = await db
-      .collection("books")
+    const books = await booksCollection
       .find({})
       .sort({ addedAt: -1 })
       .toArray();
 
     res.status(200).json({
       success: true,
-      message: "Books fetched successfully",
+      message: "Books fetched successfully!",
       books,
     });
   } catch (error) {
@@ -121,16 +159,15 @@ app.get("/books", async (req, res) => {
 
     res.status(500).json({
       success: false,
-      message: "Failed to fetch books",
+      message: "Failed to fetch books.",
     });
   }
 });
 
-// Get latest 6 books
+// Get latest 6 books - Public
 app.get("/books/latest", async (req, res) => {
   try {
-    const latestBooks = await db
-      .collection("books")
+    const latestBooks = await booksCollection
       .find({})
       .sort({ addedAt: -1 })
       .limit(6)
@@ -138,7 +175,7 @@ app.get("/books/latest", async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Latest 6 books fetched successfully",
+      message: "Latest 6 books fetched successfully!",
       books: latestBooks,
     });
   } catch (error) {
@@ -146,12 +183,12 @@ app.get("/books/latest", async (req, res) => {
 
     res.status(500).json({
       success: false,
-      message: "Failed to fetch latest books",
+      message: "Failed to fetch latest books.",
     });
   }
 });
 
-// Get a single book by ID
+// Get a single book by ID - Public
 app.get("/books/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -159,24 +196,24 @@ app.get("/books/:id", async (req, res) => {
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid book ID",
+        message: "Invalid book ID.",
       });
     }
 
-    const book = await db.collection("books").findOne({
+    const book = await booksCollection.findOne({
       _id: new ObjectId(id),
     });
 
     if (!book) {
       return res.status(404).json({
         success: false,
-        message: "Book not found",
+        message: "Book not found.",
       });
     }
 
     res.status(200).json({
       success: true,
-      message: "Book fetched successfully",
+      message: "Book fetched successfully!",
       book,
     });
   } catch (error) {
@@ -184,13 +221,13 @@ app.get("/books/:id", async (req, res) => {
 
     res.status(500).json({
       success: false,
-      message: "Failed to fetch book",
+      message: "Failed to fetch book.",
     });
   }
 });
 
-// Add a new book
-app.post("/books", async (req, res) => {
+// Add a new book - Login required
+app.post("/books", verifySession, async (req, res) => {
   try {
     const {
       title,
@@ -198,33 +235,25 @@ app.post("/books", async (req, res) => {
       category,
       image,
       description,
-      contributorName,
-      contributorEmail,
       totalCopies,
     } = req.body;
 
     if (
-      !title?.trim() ||
-      !author?.trim() ||
-      !category ||
-      !image?.trim() ||
-      !description?.trim() ||
-      !contributorName?.trim() ||
-      !contributorEmail?.trim()
+      typeof title !== "string" ||
+      typeof author !== "string" ||
+      typeof image !== "string" ||
+      typeof description !== "string" ||
+      !title.trim() ||
+      !author.trim() ||
+      !image.trim() ||
+      !description.trim() ||
+      !category
     ) {
       return res.status(400).json({
         success: false,
         message: "Please provide all required book information.",
       });
     }
-
-    const allowedCategories = [
-      "Fiction",
-      "Science",
-      "History",
-      "Kids",
-      "Others",
-    ];
 
     if (!allowedCategories.includes(category)) {
       return res.status(400).json({
@@ -242,20 +271,21 @@ app.post("/books", async (req, res) => {
       });
     }
 
+    // User information comes from verified session
     const newBook = {
       title: title.trim(),
       author: author.trim(),
       category,
       image: image.trim(),
       description: description.trim(),
-      contributorName: contributorName.trim(),
-      contributorEmail: contributorEmail.trim().toLowerCase(),
+      contributorName: req.user.name,
+      contributorEmail: req.user.email.toLowerCase(),
       totalCopies: copies,
       availableCopies: copies,
       addedAt: new Date(),
     };
 
-    const result = await db.collection("books").insertOne(newBook);
+    const result = await booksCollection.insertOne(newBook);
 
     res.status(201).json({
       success: true,
@@ -275,15 +305,15 @@ app.post("/books", async (req, res) => {
   }
 });
 
-// Update a book
-app.patch("/books/:id", async (req, res) => {
+// Update a book - Owner only
+app.patch("/books/:id", verifySession, async (req, res) => {
   try {
     const { id } = req.params;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid book ID",
+        message: "Invalid book ID.",
       });
     }
 
@@ -297,11 +327,15 @@ app.patch("/books/:id", async (req, res) => {
     } = req.body;
 
     if (
-      !title?.trim() ||
-      !author?.trim() ||
+      typeof title !== "string" ||
+      typeof author !== "string" ||
+      typeof image !== "string" ||
+      typeof description !== "string" ||
+      !title.trim() ||
+      !author.trim() ||
+      !image.trim() ||
+      !description.trim() ||
       !category ||
-      !image?.trim() ||
-      !description?.trim() ||
       totalCopies === undefined
     ) {
       return res.status(400).json({
@@ -309,14 +343,6 @@ app.patch("/books/:id", async (req, res) => {
         message: "Please provide all required book information.",
       });
     }
-
-    const allowedCategories = [
-      "Fiction",
-      "Science",
-      "History",
-      "Kids",
-      "Others",
-    ];
 
     if (!allowedCategories.includes(category)) {
       return res.status(400).json({
@@ -334,17 +360,19 @@ app.patch("/books/:id", async (req, res) => {
       });
     }
 
-    const booksCollection = db.collection("books");
     const bookId = new ObjectId(id);
+    const userEmail = req.user.email.toLowerCase();
 
+    // Verify book ownership
     const existingBook = await booksCollection.findOne({
       _id: bookId,
+      contributorEmail: userEmail,
     });
 
     if (!existingBook) {
       return res.status(404).json({
         success: false,
-        message: "Book not found.",
+        message: "Book not found or you are not allowed to update it.",
       });
     }
 
@@ -370,8 +398,13 @@ app.patch("/books/:id", async (req, res) => {
     };
 
     await booksCollection.updateOne(
-      { _id: bookId },
-      { $set: updatedBook }
+      {
+        _id: bookId,
+        contributorEmail: userEmail,
+      },
+      {
+        $set: updatedBook,
+      }
     );
 
     const book = await booksCollection.findOne({
@@ -393,28 +426,49 @@ app.patch("/books/:id", async (req, res) => {
   }
 });
 
-// Delete a book
-app.delete("/books/:id", async (req, res) => {
+// Delete a book - Owner only
+app.delete("/books/:id", verifySession, async (req, res) => {
   try {
     const { id } = req.params;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid book ID",
+        message: "Invalid book ID.",
       });
     }
 
-    const result = await db.collection("books").deleteOne({
-      _id: new ObjectId(id),
+    const bookId = new ObjectId(id);
+    const userEmail = req.user.email.toLowerCase();
+
+    const existingBook = await booksCollection.findOne({
+      _id: bookId,
+      contributorEmail: userEmail,
     });
 
-    if (result.deletedCount === 0) {
+    if (!existingBook) {
       return res.status(404).json({
         success: false,
-        message: "Book not found.",
+        message: "Book not found or access denied.",
       });
     }
+
+    // Do not delete a book that has active borrows
+    const activeBorrows = await borrowsCollection.countDocuments({
+      bookId,
+    });
+
+    if (activeBorrows > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "This book cannot be deleted while it has active borrow records.",
+      });
+    }
+
+    await booksCollection.deleteOne({
+      _id: bookId,
+      contributorEmail: userEmail,
+    });
 
     res.status(200).json({
       success: true,
@@ -430,17 +484,20 @@ app.delete("/books/:id", async (req, res) => {
   }
 });
 
-// Borrow a book
-app.post("/borrows", async (req, res) => {
+// ==========================================
+// BORROWS API
+// ==========================================
+
+// Borrow a book - Login required
+app.post("/borrows", verifySession, async (req, res) => {
   try {
     const {
       bookId,
-      userEmail,
       borrowDate,
       returnDate,
     } = req.body;
 
-    if (!bookId || !userEmail || !borrowDate || !returnDate) {
+    if (!bookId || !borrowDate || !returnDate) {
       return res.status(400).json({
         success: false,
         message: "Please provide all required borrow information.",
@@ -451,15 +508,6 @@ app.post("/borrows", async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Invalid book ID.",
-      });
-    }
-
-    const email = userEmail.trim().toLowerCase();
-
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid email address.",
       });
     }
 
@@ -477,10 +525,10 @@ app.post("/borrows", async (req, res) => {
       });
     }
 
-    const booksCollection = db.collection("books");
-    const borrowsCollection = db.collection("borrows");
     const bookObjectId = new ObjectId(bookId);
+    const userEmail = req.user.email.toLowerCase();
 
+    // Decrease available copies only when a copy is available
     const updateResult = await booksCollection.updateOne(
       {
         _id: bookObjectId,
@@ -517,7 +565,7 @@ app.post("/borrows", async (req, res) => {
       bookId: bookObjectId,
       bookTitle: book.title,
       bookImage: book.image,
-      userEmail: email,
+      userEmail,
       borrowDate: borrowedAt,
       returnDate: returnedAt,
     };
@@ -534,6 +582,7 @@ app.post("/borrows", async (req, res) => {
         },
       });
     } catch (insertError) {
+      // Restore copy if borrow insertion fails
       await booksCollection.updateOne(
         { _id: bookObjectId },
         { $inc: { availableCopies: 1 } }
@@ -551,29 +600,19 @@ app.post("/borrows", async (req, res) => {
   }
 });
 
-// Get borrows of a user
-app.get("/borrows", async (req, res) => {
+// Get current user's borrows - Login required
+app.get("/borrows", verifySession, async (req, res) => {
   try {
-    const { email } = req.query;
-
-    if (!email || typeof email !== "string") {
-      return res.status(400).json({
-        success: false,
-        message: "User email is required.",
-      });
-    }
-
-    const userEmail = email.trim().toLowerCase();
-
-    const borrows = await db
-      .collection("borrows")
-      .find({ userEmail })
+    const borrows = await borrowsCollection
+      .find({
+        userEmail: req.user.email.toLowerCase(),
+      })
       .sort({ borrowDate: -1 })
       .toArray();
 
     res.status(200).json({
       success: true,
-      message: "Borrow records fetched successfully.",
+      message: "Borrow records fetched successfully!",
       borrows,
     });
   } catch (error) {
@@ -586,8 +625,8 @@ app.get("/borrows", async (req, res) => {
   }
 });
 
-// Return a borrowed book
-app.delete("/borrows/:id", async (req, res) => {
+// Return borrowed book - Owner only
+app.delete("/borrows/:id", verifySession, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -598,32 +637,23 @@ app.delete("/borrows/:id", async (req, res) => {
       });
     }
 
-    const borrowsCollection = db.collection("borrows");
     const borrowId = new ObjectId(id);
+    const userEmail = req.user.email.toLowerCase();
 
-    const borrow = await borrowsCollection.findOne({
+    // Atomically delete only the logged-in user's borrow record
+    const borrow = await borrowsCollection.findOneAndDelete({
       _id: borrowId,
+      userEmail,
     });
 
     if (!borrow) {
       return res.status(404).json({
         success: false,
-        message: "Borrow record not found.",
+        message: "Borrow record not found or access denied.",
       });
     }
 
-    const deleteResult = await borrowsCollection.deleteOne({
-      _id: borrowId,
-    });
-
-    if (deleteResult.deletedCount === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Borrow record not found.",
-      });
-    }
-
-    await db.collection("books").updateOne(
+    await booksCollection.updateOne(
       { _id: new ObjectId(borrow.bookId) },
       { $inc: { availableCopies: 1 } }
     );
@@ -645,13 +675,18 @@ app.delete("/borrows/:id", async (req, res) => {
 // ==========================================
 // REVIEWS API
 // ==========================================
-
-// Get all reviews (newest first)
+// Get all reviews - Public
 app.get("/reviews", async (req, res) => {
   try {
-    const reviews = await db
-      .collection("reviews")
-      .find({})
+    const reviews = await reviewsCollection
+      .find(
+        {},
+        {
+          projection: {
+            userEmail: 0,
+          },
+        }
+      )
       .sort({ createdAt: -1 })
       .toArray();
 
@@ -669,45 +704,69 @@ app.get("/reviews", async (req, res) => {
     });
   }
 });
-
-// Add a new review
-app.post("/reviews", async (req, res) => {
+// Check if the logged-in user has already reviewed
+app.get("/reviews/me", verifySession, async (req, res) => {
   try {
-    const {
-      userName,
-      userEmail,
-      userImage,
-      rating,
-      comment,
-    } = req.body;
+    const email = req.user.email?.trim().toLowerCase();
 
-    if (
-      typeof userName !== "string" ||
-      typeof userEmail !== "string" ||
-      typeof comment !== "string" ||
-      rating === undefined
-    ) {
-      return res.status(400).json({
+    if (!email) {
+      return res.status(401).json({
         success: false,
-        message: "Please provide all required review information.",
+        message: "User email not found!",
       });
     }
 
-    const name = userName.trim();
-    const email = userEmail.trim().toLowerCase();
+    const review = await reviewsCollection.findOne(
+      { userEmail: email },
+      { projection: { _id: 1 } }
+    );
+
+    res.status(200).json({
+      success: true,
+      hasReviewed: Boolean(review),
+    });
+  } catch (error) {
+    console.error("Check review error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to check review status!",
+    });
+  }
+});
+
+// Add review - Login required
+app.post("/reviews", verifySession, async (req, res) => {
+  try {
+    const { rating, comment } = req.body;
+
+    if (
+      rating === undefined ||
+      typeof comment !== "string"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide rating and comment.",
+      });
+    }
+
+    // Identity comes from verified session
+    const name = req.user.name?.trim();
+    const email = req.user.email?.trim().toLowerCase();
+    const userImage = req.user.image || "";
     const reviewComment = comment.trim();
 
     if (!name || name.length > 100) {
       return res.status(400).json({
         success: false,
-        message: "Name must be between 1 and 100 characters.",
+        message: "Your account name must be between 1 and 100 characters.",
       });
     }
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid email address.",
+        message: "Invalid account email address.",
       });
     }
 
@@ -724,20 +783,20 @@ app.post("/reviews", async (req, res) => {
       });
     }
 
-    if (reviewComment.length < 10 || reviewComment.length > 500) {
+    if (
+      reviewComment.length < 10 ||
+      reviewComment.length > 500
+    ) {
       return res.status(400).json({
         success: false,
         message: "Review must be between 10 and 500 characters.",
       });
     }
 
-    const reviewsCollection = db.collection("reviews");
-
     const newReview = {
       userName: name,
       userEmail: email,
-      userImage:
-        typeof userImage === "string" ? userImage.trim() : "",
+      userImage,
       rating: reviewRating,
       comment: reviewComment,
       createdAt: new Date(),
@@ -771,9 +830,22 @@ app.post("/reviews", async (req, res) => {
   }
 });
 
-// Multer error handler
+// ==========================================
+// ERROR HANDLER
+// ==========================================
+
 app.use((error, req, res, next) => {
   console.error("Request error:", error);
+
+  if (error instanceof multer.MulterError) {
+    return res.status(400).json({
+      success: false,
+      message:
+        error.code === "LIMIT_FILE_SIZE"
+          ? "Image size must be 5 MB or less."
+          : error.message,
+    });
+  }
 
   res.status(400).json({
     success: false,
@@ -781,15 +853,22 @@ app.use((error, req, res, next) => {
   });
 });
 
-// Start server
+// ==========================================
+// START SERVER
+// ==========================================
+
 async function startServer() {
   try {
+    if (!process.env.MONGODB_URI || !process.env.DB_NAME) {
+      throw new Error("MONGODB_URI and DB_NAME must be configured.");
+    }
+
     await client.connect();
 
     console.log("MongoDB connected successfully!");
 
-    // One review per email
-    await db.collection("reviews").createIndex(
+    // One review per user email
+    await reviewsCollection.createIndex(
       { userEmail: 1 },
       { unique: true }
     );
@@ -800,7 +879,7 @@ async function startServer() {
       console.log(`BookNook server running on port ${port}`);
     });
   } catch (error) {
-    console.error("Failed to connect to MongoDB:", error);
+    console.error("Failed to start server:", error);
     process.exit(1);
   }
 }
