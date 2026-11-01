@@ -3,78 +3,81 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { MongoClient, ObjectId } from "mongodb";
-import multer from "multer";
-import path from "path";
-import fs from "fs";
-import { randomUUID } from "crypto";
-import { fileURLToPath } from "url";
+import verifyToken from "./middlewares/verifyToken.js";
 
-dotenv.config({
-  path: path.join(path.dirname(fileURLToPath(import.meta.url)), ".env"),
-});
+dotenv.config();
+
+if (!process.env.MONGODB_URI) {
+  throw new Error("MONGODB_URI is not configured.");
+}
+
+if (!process.env.DB_NAME) {
+  throw new Error("DB_NAME is not configured.");
+}
 
 if (!process.env.FRONTEND_URL) {
   throw new Error("FRONTEND_URL is not configured.");
 }
 
 const app = express();
-const port = process.env.PORT || 5000;
-import verifyToken from "./middlewares/verifyToken.js";
-
 
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin: process.env.FRONTEND_URL,
     credentials: true,
   })
 );
 
 app.use(express.json());
 
-// MongoDB connection
+/* ==========================================
+   MONGODB CONNECTION
+========================================== */
+
 const client = new MongoClient(process.env.MONGODB_URI);
-const db = client.db(process.env.DB_NAME);
 
-// Upload directory
-const uploadDir = path.join(process.cwd(), "uploads");
+let db;
+let connectionPromise;
 
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
+async function connectToDatabase() {
+  if (db) return db;
+
+  if (!connectionPromise) {
+    connectionPromise = client
+      .connect()
+      .then(() => {
+        db = client.db(process.env.DB_NAME);
+        console.log("MongoDB connected successfully!");
+        return db;
+      })
+      .catch((error) => {
+        connectionPromise = null;
+        console.error("MongoDB connection error:", error);
+        throw error;
+      });
+  }
+
+  return connectionPromise;
 }
 
-// Multer storage
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-
-  filename: (req, file, cb) => {
-    const extension = path.extname(file.originalname).toLowerCase();
-    cb(null, `${randomUUID()}${extension}`);
-  },
-});
-
-// Only image files
-const fileFilter = (req, file, cb) => {
-  if (file.mimetype.startsWith("image/")) {
-    cb(null, true);
-  } else {
-    cb(new Error("Only image files are allowed!"));
+// Connect to MongoDB before handling API requests.
+app.use(async (req, res, next) => {
+  try {
+    await connectToDatabase();
+    next();
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Database connection failed.",
+    });
   }
-};
-
-const upload = multer({
-  storage,
-  fileFilter,
-  limits: {
-    fileSize: 5 * 1024 * 1024,
-  },
 });
 
-// Serve uploaded images
-app.use("/uploads", express.static(uploadDir));
+/* ==========================================
+   TEST ROUTES
+========================================== */
 
-// Test route
+// Server test
 app.get("/", (req, res) => {
   res.send("BookNook Server is Running!");
 });
@@ -83,39 +86,18 @@ app.get("/", (req, res) => {
 app.get("/test-db", async (req, res) => {
   try {
     await db.command({ ping: 1 });
-    res.send("MongoDB Connected Successfully!");
+
+    res.status(200).send("MongoDB Connected Successfully!");
   } catch (error) {
     console.error("MongoDB connection error:", error);
+
     res.status(500).send("MongoDB Connection Failed!");
   }
 });
 
-// Image upload API
-app.post("/upload", upload.single("image"), (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        message: "Please select an image.",
-      });
-    }
-
-    const imageUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
-
-    res.status(201).json({
-      success: true,
-      message: "Image uploaded successfully!",
-      imageUrl,
-    });
-  } catch (error) {
-    console.error("Image upload error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Image upload failed.",
-    });
-  }
-});
+/* ==========================================
+   BOOKS API
+========================================== */
 
 // Get all books
 app.get("/books", async (req, res) => {
@@ -445,6 +427,10 @@ app.delete("/books/:id", async (req, res) => {
   }
 });
 
+/* ==========================================
+   BORROWS API
+========================================== */
+
 // Borrow a book
 app.post("/borrows", async (req, res) => {
   try {
@@ -540,7 +526,7 @@ app.post("/borrows", async (req, res) => {
     try {
       const result = await borrowsCollection.insertOne(borrowData);
 
-      return res.status(201).json({
+      res.status(201).json({
         success: true,
         message: "Book borrowed successfully!",
         borrow: {
@@ -639,7 +625,7 @@ app.delete("/borrows/:id", async (req, res) => {
     }
 
     await db.collection("books").updateOne(
-      { _id: new ObjectId(borrow.bookId) },
+      { _id: borrow.bookId },
       { $inc: { availableCopies: 1 } }
     );
 
@@ -657,11 +643,11 @@ app.delete("/borrows/:id", async (req, res) => {
   }
 });
 
-// ==========================================
-// REVIEWS API
-// ==========================================
+/* ==========================================
+   REVIEWS API
+========================================== */
 
-// Get all reviews (newest first)
+// Get all reviews
 app.get("/reviews", async (req, res) => {
   try {
     const reviews = await db
@@ -688,7 +674,7 @@ app.get("/reviews", async (req, res) => {
 // Get current user's review status
 app.get("/reviews/me", verifyToken, async (req, res) => {
   try {
-    const email = req.user.email?.toLowerCase();
+    const email = req.user.email?.trim().toLowerCase();
 
     if (!email) {
       return res.status(400).json({
@@ -720,7 +706,6 @@ app.post("/reviews", verifyToken, async (req, res) => {
   try {
     const { rating, comment } = req.body;
 
-    // Get user information from verified JWT
     const userName = req.user.name?.trim();
     const userEmail = req.user.email?.trim().toLowerCase();
     const userImage = req.user.image || "";
@@ -760,7 +745,6 @@ app.post("/reviews", verifyToken, async (req, res) => {
 
     const reviewsCollection = db.collection("reviews");
 
-    // Prevent duplicate reviews
     const existingReview = await reviewsCollection.findOne({
       userEmail,
     });
@@ -802,38 +786,18 @@ app.post("/reviews", verifyToken, async (req, res) => {
   }
 });
 
-// Multer error handler
+/* ==========================================
+   ERROR HANDLER
+========================================== */
+
 app.use((error, req, res, next) => {
   console.error("Request error:", error);
 
-  res.status(400).json({
+  res.status(500).json({
     success: false,
     message: error.message || "Something went wrong.",
   });
 });
 
-// Start server
-async function startServer() {
-  try {
-    await client.connect();
 
-    console.log("MongoDB connected successfully!");
-
-    // One review per email
-    await db.collection("reviews").createIndex(
-      { userEmail: 1 },
-      { unique: true }
-    );
-
-    console.log("Review unique index created successfully!");
-
-    app.listen(port, () => {
-      console.log(`BookNook server running on port ${port}`);
-    });
-  } catch (error) {
-    console.error("Failed to connect to MongoDB:", error);
-    process.exit(1);
-  }
-}
-
-startServer();
+export default app;
