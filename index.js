@@ -102,16 +102,6 @@ app.post("/upload", upload.single("image"), (req, res) => {
   }
 });
 
-
-
-// Multer error handler
-app.use((error, req, res, next) => {
-  res.status(400).json({
-    success: false,
-    message: error.message || "Something went wrong.",
-  });
-});
-
 // Get all books
 app.get("/books", async (req, res) => {
   try {
@@ -127,6 +117,8 @@ app.get("/books", async (req, res) => {
       books,
     });
   } catch (error) {
+    console.error("Get books error:", error);
+
     res.status(500).json({
       success: false,
       message: "Failed to fetch books",
@@ -164,7 +156,6 @@ app.get("/books/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Validate MongoDB ObjectId
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
@@ -284,22 +275,6 @@ app.post("/books", async (req, res) => {
   }
 });
 
-// Start server
-async function startServer() {
-  try {
-    await client.connect();
-
-    console.log("MongoDB connected successfully!");
-
-    app.listen(port, () => {
-      console.log(`BookNook server running on port ${port}`);
-    });
-  } catch (error) {
-    console.error("Failed to connect to MongoDB:", error);
-    process.exit(1);
-  }
-}
-
 // Update a book
 app.patch("/books/:id", async (req, res) => {
   try {
@@ -321,7 +296,6 @@ app.patch("/books/:id", async (req, res) => {
       totalCopies,
     } = req.body;
 
-    // Validate required fields
     if (
       !title?.trim() ||
       !author?.trim() ||
@@ -336,7 +310,6 @@ app.patch("/books/:id", async (req, res) => {
       });
     }
 
-    // Validate category
     const allowedCategories = [
       "Fiction",
       "Science",
@@ -352,7 +325,6 @@ app.patch("/books/:id", async (req, res) => {
       });
     }
 
-    // Validate total copies
     const copies = Number(totalCopies);
 
     if (!Number.isInteger(copies) || copies < 1) {
@@ -365,7 +337,6 @@ app.patch("/books/:id", async (req, res) => {
     const booksCollection = db.collection("books");
     const bookId = new ObjectId(id);
 
-    // Find existing book
     const existingBook = await booksCollection.findOne({
       _id: bookId,
     });
@@ -377,7 +348,6 @@ app.patch("/books/:id", async (req, res) => {
       });
     }
 
-    // Calculate borrowed copies
     const borrowedCopies =
       existingBook.totalCopies - existingBook.availableCopies;
 
@@ -388,7 +358,6 @@ app.patch("/books/:id", async (req, res) => {
       });
     }
 
-    // Updated book information
     const updatedBook = {
       title: title.trim(),
       author: author.trim(),
@@ -400,13 +369,11 @@ app.patch("/books/:id", async (req, res) => {
       updatedAt: new Date(),
     };
 
-    // Update book in MongoDB
     await booksCollection.updateOne(
       { _id: bookId },
       { $set: updatedBook }
     );
 
-    // Get updated book
     const book = await booksCollection.findOne({
       _id: bookId,
     });
@@ -473,7 +440,6 @@ app.post("/borrows", async (req, res) => {
       returnDate,
     } = req.body;
 
-    // Validate required fields
     if (!bookId || !userEmail || !borrowDate || !returnDate) {
       return res.status(400).json({
         success: false,
@@ -481,7 +447,6 @@ app.post("/borrows", async (req, res) => {
       });
     }
 
-    // Validate book ID
     if (!ObjectId.isValid(bookId)) {
       return res.status(400).json({
         success: false,
@@ -489,7 +454,6 @@ app.post("/borrows", async (req, res) => {
       });
     }
 
-    // Validate email
     const email = userEmail.trim().toLowerCase();
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -499,7 +463,6 @@ app.post("/borrows", async (req, res) => {
       });
     }
 
-    // Validate dates
     const borrowedAt = new Date(borrowDate);
     const returnedAt = new Date(returnDate);
 
@@ -518,7 +481,6 @@ app.post("/borrows", async (req, res) => {
     const borrowsCollection = db.collection("borrows");
     const bookObjectId = new ObjectId(bookId);
 
-    // Decrease available copies only if a copy is available
     const updateResult = await booksCollection.updateOne(
       {
         _id: bookObjectId,
@@ -547,7 +509,6 @@ app.post("/borrows", async (req, res) => {
       });
     }
 
-    // Get book details
     const book = await booksCollection.findOne({
       _id: bookObjectId,
     });
@@ -573,7 +534,6 @@ app.post("/borrows", async (req, res) => {
         },
       });
     } catch (insertError) {
-      // Restore available copy if borrow record could not be saved
       await booksCollection.updateOne(
         { _id: bookObjectId },
         { $inc: { availableCopies: 1 } }
@@ -607,9 +567,7 @@ app.get("/borrows", async (req, res) => {
 
     const borrows = await db
       .collection("borrows")
-      .find({
-        userEmail,
-      })
+      .find({ userEmail })
       .sort({ borrowDate: -1 })
       .toArray();
 
@@ -633,7 +591,6 @@ app.delete("/borrows/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Validate borrow ID
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
@@ -644,7 +601,6 @@ app.delete("/borrows/:id", async (req, res) => {
     const borrowsCollection = db.collection("borrows");
     const borrowId = new ObjectId(id);
 
-    // Find borrow record
     const borrow = await borrowsCollection.findOne({
       _id: borrowId,
     });
@@ -656,7 +612,6 @@ app.delete("/borrows/:id", async (req, res) => {
       });
     }
 
-    // Delete borrow record
     const deleteResult = await borrowsCollection.deleteOne({
       _id: borrowId,
     });
@@ -668,16 +623,9 @@ app.delete("/borrows/:id", async (req, res) => {
       });
     }
 
-    // Increase available copies
     await db.collection("books").updateOne(
-      {
-        _id: new ObjectId(borrow.bookId),
-      },
-      {
-        $inc: {
-          availableCopies: 1,
-        },
-      }
+      { _id: new ObjectId(borrow.bookId) },
+      { $inc: { availableCopies: 1 } }
     );
 
     res.status(200).json({
@@ -693,5 +641,168 @@ app.delete("/borrows/:id", async (req, res) => {
     });
   }
 });
+
+// ==========================================
+// REVIEWS API
+// ==========================================
+
+// Get all reviews (newest first)
+app.get("/reviews", async (req, res) => {
+  try {
+    const reviews = await db
+      .collection("reviews")
+      .find({})
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.status(200).json({
+      success: true,
+      message: "Reviews fetched successfully!",
+      reviews,
+    });
+  } catch (error) {
+    console.error("Get reviews error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch reviews.",
+    });
+  }
+});
+
+// Add a new review
+app.post("/reviews", async (req, res) => {
+  try {
+    const {
+      userName,
+      userEmail,
+      userImage,
+      rating,
+      comment,
+    } = req.body;
+
+    if (
+      typeof userName !== "string" ||
+      typeof userEmail !== "string" ||
+      typeof comment !== "string" ||
+      rating === undefined
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide all required review information.",
+      });
+    }
+
+    const name = userName.trim();
+    const email = userEmail.trim().toLowerCase();
+    const reviewComment = comment.trim();
+
+    if (!name || name.length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Name must be between 1 and 100 characters.",
+      });
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email address.",
+      });
+    }
+
+    const reviewRating = Number(rating);
+
+    if (
+      !Number.isInteger(reviewRating) ||
+      reviewRating < 1 ||
+      reviewRating > 5
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Rating must be between 1 and 5.",
+      });
+    }
+
+    if (reviewComment.length < 10 || reviewComment.length > 500) {
+      return res.status(400).json({
+        success: false,
+        message: "Review must be between 10 and 500 characters.",
+      });
+    }
+
+    const reviewsCollection = db.collection("reviews");
+
+    const newReview = {
+      userName: name,
+      userEmail: email,
+      userImage:
+        typeof userImage === "string" ? userImage.trim() : "",
+      rating: reviewRating,
+      comment: reviewComment,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const result = await reviewsCollection.insertOne(newReview);
+
+    res.status(201).json({
+      success: true,
+      message: "Review submitted successfully!",
+      review: {
+        _id: result.insertedId,
+        ...newReview,
+      },
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: "You have already submitted a review.",
+      });
+    }
+
+    console.error("Add review error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to submit review.",
+    });
+  }
+});
+
+// Multer error handler
+app.use((error, req, res, next) => {
+  console.error("Request error:", error);
+
+  res.status(400).json({
+    success: false,
+    message: error.message || "Something went wrong.",
+  });
+});
+
+// Start server
+async function startServer() {
+  try {
+    await client.connect();
+
+    console.log("MongoDB connected successfully!");
+
+    // One review per email
+    await db.collection("reviews").createIndex(
+      { userEmail: 1 },
+      { unique: true }
+    );
+
+    console.log("Review unique index created successfully!");
+
+    app.listen(port, () => {
+      console.log(`BookNook server running on port ${port}`);
+    });
+  } catch (error) {
+    console.error("Failed to connect to MongoDB:", error);
+    process.exit(1);
+  }
+}
 
 startServer();
